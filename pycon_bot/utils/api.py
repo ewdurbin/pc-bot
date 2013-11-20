@@ -2,7 +2,8 @@ from calendar import timegm
 from datetime import datetime
 from hashlib import sha1
 from pycon_bot import settings
-from pycon_bot.utils.exceptions import APIError, AuthenticationError
+from pycon_bot.utils.exceptions import (APIError, AuthenticationError,
+                                        InternalServerError)
 from requests.compat import quote
 import json
 import os
@@ -34,12 +35,16 @@ class API(object):
         # the URL.
         if kwargs:
             url += '?' + '&'.join(
-                ['%s=%s' % (k, quote(v)) for k, v in kwargs.items()],
+                ['%s=%s' % (k, quote(str(v))) for k, v in kwargs.items()],
             )
 
         # Generate the appropriate request signature to certify
         # that this is a valid request.
         signature = self._sign_request(url, method, body)
+
+        # Add the appropriate content-type header.
+        if method == 'POST':
+            signature['Content-Type'] = 'application/json'
 
         # Make the actual request to the PyCon website.
         r = requests.request(method, url, data=body, headers=signature,
@@ -47,6 +52,10 @@ class API(object):
 
         # Sanity check: Did we get a bad request of some kind?
         if r.status_code >= 400:
+            # If we got a 500 response, we can't really know what to do
+            if r.status_code >= 500:
+                raise InternalServerError(r)
+
             # What exception class shall I use?
             exc_class = APIError
             if r.status_code == 403:
@@ -55,7 +64,10 @@ class API(object):
                 exc_class = NotFound
 
             # Create and raise the exception
-            ex = exc_class(r.json()['error'])
+            try:
+                ex = exc_class(r.json()['error'])
+            except ValueError:
+                raise InternalServerError(r)
             ex.request = r
             raise ex
 
